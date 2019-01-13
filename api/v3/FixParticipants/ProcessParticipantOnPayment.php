@@ -38,35 +38,33 @@ function civicrm_api3_fix_participants_process_participant_on_payment($params) {
 }
 
 /**
- * - Registered (1): "Registered"
- * 	-> Cancelled (4) if completed <= refunded
+ * - Registered (1):
  * - Cancelled (4): "Cancelled"
- * 	-> Registered (1) if completed > refunded
+ * 	-> Registered (1) if completed > 0
  * - Expired (12): "Expired"
- * 	-> Registered (1) if completed > refunded
- * 	-> Cancelled (4) if completed <= refunded
+ * 	-> Registered (1) if completed > 0
  * - Pending (6): "Pending from incomplete transaction"
  * 	-> Expired (12) if completed == 0
- * 	-> Registered (1) if completed > refunded
- * 	-> Cancelled (4) if completed <= refunded
+ * 	-> Registered (1) if completed > 0
  */
 function process_participants($events) {
 	$returnMessages = array("<br/>");
 
 	$pending = civicrm_api3('Participant', 'get', [
 	  'sequential' => 1,
-	  'status_id' => ["Pending from incomplete transaction", "Registered", "Cancelled", "Expired"],
+	  'status_id' => ["Pending from incomplete transaction", "Cancelled", "Expired"],
 	  "event_id" => $events,
-	  'options' => ['sort' => "id desc"],
+	  'options' => ['sort' => "id desc", 'limit' => 5000,],
 	  'api.ParticipantPayment.get' => [],
 	]);
 
+	echo "Found: " . count($pending['values']);
 	foreach ($pending['values'] as $participant) {
 		$id = $participant['participant_id'];
 		$status = $participant['participant_status'];
 		$message = "<br/>Participant: '{$participant['display_name']}' ($id) is '$status' for event '{$participant['event_title']}'<br/>";
 		$contribution_ids = $participant['api.ParticipantPayment.get']['values'];
-		$completed = $refunded = 0;
+		$completed = 0;
 		foreach ($contribution_ids as $cid) {
 			$contribution = civicrm_api3('Contribution', 'get', [
 			  'sequential' => 1,
@@ -79,46 +77,34 @@ function process_participants($events) {
 				$contribution_status = $contribution['values'][0]['contribution_status'];
 				if ($contribution_status == 'Completed') {
 					$completed += 1;
-				} else if ($contribution_status == 'Refunded') {
-					$refunded += 1;
 				}
 				$message .= "   Contribution: {$cid['contribution_id']} ($contribution_status)<br/>";
 			}
 		}
-		$message .= "=== completed: $completed, refunded: $refunded ";
+		$message .= "=== completed: $completed ";
 		$status_id = '';
 		switch ($status) {
 		case "Registered":
-			if ($completed > 0 && $completed <= $refunded) {
-				$message .=  "=> 'Cancelled(4)'";
-				$status_id = "Cancelled";
-			}
 			break;
 		case "Cancelled":
-			if ($completed > $refunded) {
+			if ($completed > 0) {
 				$message .=  "=> 'Registered(1)'";
 				$status_id = "Registered";
 			}
 			break;
 		case "Expired":
-			if ($completed > $refunded) {
+			if ($completed > 0) {
 				$message .=  "=> 'Registered(1)'";
 				$status_id = "Registered";
-			} else if ($completed > 0 && $completed <= $refunded) {
-				$message .=  "=> 'Cancelled(4)'";
-				$status_id = "Cancelled";
 			}
 			break;
 		case "Pending (incomplete transaction)":
 			if ($completed == 0) {
 				$message .=  "=> 'Expired(12)'";
 				$status_id = "Expired";
-			} else if ($completed > $refunded) {
+			} else if ($completed > 0) {
 				$message .=  "=> 'Registered(1)'";
 				$status_id = "Registered";
-			} else if ($completed > 0 && $completed <= $refunded) {
-				$message .=  "=> 'Cancelled(4)'";
-				$status_id = "Cancelled";
 			}
 			break;
 		default:
@@ -129,6 +115,7 @@ function process_participants($events) {
 				'id' => $id,
 				'status_id' => $status_id,
 			]);
+			$message .= json_encode($result);
 		}
 		$returnMessages[] .=  $message . "<br/>";
 	}
